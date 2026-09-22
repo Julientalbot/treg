@@ -1241,6 +1241,8 @@ class Feedback(SQLModel, table=True):
     call_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     verified_call_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     endpoint_id: str | None = Field(default=None)
+    # Attribution snapshot: never infer ownership from a current membership or lossy audit.
+    tags: dict | None = Field(default=None, sa_column=Column("tags", JSON, nullable=True))
     created_at: NaiveUTC = Field(default_factory=_now)
 
 

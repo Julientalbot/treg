@@ -22,7 +22,7 @@ class FeedbackRateLimited(Exception):
 
 async def submit(
     *, org_id: int, user_email: str, category: FeedbackCategory, message: str,
-    call_ids: list[str], endpoint_id: str | None,
+    call_ids: list[str], endpoint_id: str | None, pinned_tags: dict | None = None,
 ) -> int:
     async with session_maker() as db:
         await ratestore.sweep(db, RATE_NAMESPACE)
@@ -35,16 +35,21 @@ async def submit(
         # unknown references never grant access or count as verified attribution.
         verified: set[str] = set()
         if call_ids:
+            # A pinned reporter verifies only against its own pin's rows, like every other read.
             verified.update((await db.execute(select(CallRecord.call_ref).where(
                 CallRecord.org_id == org_id, CallRecord.call_ref.in_(call_ids),
+                *pinned_tag_predicates(CallRecord.tags, pinned_tags),
             ))).scalars())
             verified.update((await db.execute(select(LedgerEntry.call_id).where(
                 LedgerEntry.org_id == org_id, LedgerEntry.call_id.in_(call_ids),
+                # Only the reserve entry carries `meta.tags`, so a pinned reporter matches on it.
+                *([LedgerEntry.kind == "reserve",
+                   *pinned_tag_predicates(LedgerEntry.meta["tags"], pinned_tags)] if pinned_tags else []),
             ))).scalars())
         row = feedback.add(
             db, org_id=org_id, user_email=user_email, category=category, message=message,
             call_ids=call_ids, verified_call_ids=[ref for ref in call_ids if ref in verified],
-            endpoint_id=endpoint_id,
+            endpoint_id=endpoint_id, tags=dict(pinned_tags) if pinned_tags else None,
         )
         await db.flush()
         feedback_id = row.id

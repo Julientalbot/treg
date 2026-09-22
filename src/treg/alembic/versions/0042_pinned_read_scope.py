@@ -12,10 +12,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    for table in ("runrecord", "asynctaskrecord", "asyncresourcerecord"):
+    for table in ("runrecord", "asynctaskrecord", "asyncresourcerecord", "feedback"):
         op.add_column(table, sa.Column("tags", sa.JSON(), nullable=True))
 
 
 def downgrade() -> None:
-    for table in ("asyncresourcerecord", "asynctaskrecord", "runrecord"):
+    for table in ("feedback", "asyncresourcerecord", "asynctaskrecord", "runrecord"):
         op.drop_column(table, "tags")

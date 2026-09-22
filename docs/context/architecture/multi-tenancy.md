@@ -345,7 +345,10 @@ header is a 403. An unpinned operator retains the org-wide view and the shared b
 `/calls`, `/calls/{id}/result`, `/calls/{call_ref}` and `/runs` apply that scope before pagination or
 loading archive bodies. A known foreign or unattributed id is a 404, just like an unknown id.
 `POST /reviews` resolves its call through the same predicates, so a pinned caller can neither rate nor
-probe another pin's call. Every audit writer stores the pin, the routed parent row included.
+probe another pin's call. Every audit writer stores the pin, the routed parent row and the router's
+refusal fallback included. A feedback report snapshots the reporter's pin (`Feedback.tags`, also in
+revision `0042`): `GET /feedback/{id}` reads through it and a pinned reporter's `call_ids` verify only
+against its own pin's rows.
 Matching is by pin, not by current membership: two identities with the same pin share that view.
 Changing a membership's pin does not relabel its earlier records.
 

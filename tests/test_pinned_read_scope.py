@@ -11,7 +11,7 @@ from treg.application import asynctasks as task_app
 from treg.application.call import service as call_service
 from treg.domain import money
 from treg.infra.db import session_maker
-from treg.models import AsyncResourceRecord, AsyncTaskRecord, CallRecord, LedgerEntry, RunRecord
+from treg.models import AsyncResourceRecord, AsyncTaskRecord, CallRecord, Feedback, LedgerEntry, RunRecord
 from treg.timeutil import utcnow_naive
 from test_asynctasks import EP, _response, replicate_platform, legacy_async_platform, minimax_platform
 from test_tag_billing import _mint_agent, _mk_echo_tool, _org_id
@@ -319,3 +319,37 @@ async def test_routed_parent_row_carries_the_pin_and_reviews_are_scoped(clients,
     review = {'call_id': ref, 'usefulness': 'useful'}
     assert (await clients.post('/reviews', json=review, headers=h['b'])).status_code == 404
     assert (await clients.post('/reviews', json=review, headers=h['a'])).status_code == 201
+
+
+async def test_refusals_and_feedback_reports_stay_inside_the_pin(clients, identities):
+    """A refusal is written by the router's fallback, not by `service.py`; it must carry the pin or
+    the caller cannot see its own 403/404 while integrating. A feedback report snapshots the pin
+    and is readable only through it, and verifies call references only against the pin's rows."""
+    org, h = identities
+    await _mk_echo_tool(clients)
+    refs = []
+    for headers, status in [(h['a'], 404), ({**h['a'], 'X-Treg-Meta': 'customer=b'}, 403)]:
+        r = await clients.get('/call/no-such-tool/x' if status == 404 else '/call/echo/hello', headers=headers)
+        assert r.status_code == status, r.text
+        refs.append(r.headers['X-Treg-Call-Id'])
+    await audit.drain()
+    own = (await clients.get('/calls', headers=h['a'])).json()
+    assert {x['call_ref'] for x in own} == set(refs) and all(x['tags'] == {'customer': 'a'} for x in own)
+    assert (await clients.get('/calls', headers=h['b'])).json() == []
+    for ref in refs:
+        assert (await clients.get(f'/calls/{ref}', headers=h['a'])).status_code == 200
+        assert (await clients.get(f'/calls/{ref}', headers=h['b'])).status_code == 404
+    report = {'category': 'quality', 'message': 'customer a private note', 'call_ids': [refs[0]]}
+    r = await clients.post('/feedback', json=report, headers=h['a'])
+    assert r.status_code == 201, r.text
+    fid = r.json()['feedback_id']
+    assert (await clients.get(f'/feedback/{fid}', headers=h['a'])).status_code == 200
+    assert (await clients.get(f'/feedback/{fid}', headers=h['b'])).status_code == 404
+    assert (await clients.get(f'/feedback/{fid}')).status_code == 200, 'the unpinned operator still sees it'
+    # b may cite a's reference, but it is a claim, never a verified one.
+    r = await clients.post('/feedback', json={**report, 'message': 'foreign ref'}, headers=h['b'])
+    assert r.status_code == 201, r.text
+    async with session_maker() as db:
+        rows = {f.message: f for f in (await db.execute(select(Feedback))).scalars().all()}
+    assert rows['customer a private note'].verified_call_ids == [refs[0]]
+    assert rows['foreign ref'].verified_call_ids == [] and rows['foreign ref'].tags == {'customer': 'b'}
