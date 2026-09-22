@@ -86,7 +86,8 @@ async def submit_review(
     try:
         review_id, inserted = await feedback_app.submit_review(
             org_id=caller.org_id, user_email=caller.email,
-            client=request.headers.get("X-Treg-Client", ""), **body.model_dump(),
+            client=request.headers.get("X-Treg-Client", ""),
+            pinned_tags=caller.membership.pinned_tags, **body.model_dump(),
         )
     except feedback_app.ReviewCallNotFound:
         raise HTTPException(404, "Call record not found in this team; it may not be written yet. Retry shortly.") from None

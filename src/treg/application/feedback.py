@@ -6,6 +6,7 @@ from sqlmodel import select
 from .. import hints, ratestore
 from ..domain import feedback
 from ..domain.feedback import reviews
+from ..domain.governance.access import pinned_tag_predicates
 from ..feedback_contract import FeedbackCategory, ReviewUsefulness
 from ..infra.db import session_maker
 from ..models import CallRecord, LedgerEntry
@@ -61,12 +62,16 @@ class ReviewOwnTool(Exception):
 
 async def submit_review(
     *, org_id: int, user_email: str, call_id: str, usefulness: ReviewUsefulness,
-    reason: str | None = None, client: str = "",
+    reason: str | None = None, client: str = "", pinned_tags: dict | None = None,
 ) -> tuple[int, bool]:
-    """Return (review_id, inserted); attribution never comes from the caller."""
+    """Return (review_id, inserted); attribution never comes from the caller.
+
+    A pinned caller may only review a call carrying its pin: the same read scope as `/calls`, so
+    a foreign reference is a 404 here too rather than an oracle for another customer's calls."""
     async with session_maker() as db:
         record = (await db.execute(select(CallRecord).where(
             CallRecord.org_id == org_id, CallRecord.call_ref == call_id,
+            *pinned_tag_predicates(CallRecord.tags, pinned_tags),
         ).order_by(CallRecord.id.asc()).limit(1))).scalar_one_or_none()
         if record is None:
             # The ledger can verify provenance while audit is delayed, but cannot establish

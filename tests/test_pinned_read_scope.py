@@ -16,6 +16,8 @@ from treg.timeutil import utcnow_naive
 from test_asynctasks import EP, _response, replicate_platform, legacy_async_platform, minimax_platform
 from test_tag_billing import _mint_agent, _mk_echo_tool, _org_id
 from test_run import _register_runnable
+from test_marketplace_call import platform_on  # noqa: F401
+from test_routing import ROUTED, _relay_by_provider, enrichment_on  # noqa: F401
 
 
 @pytest.fixture
@@ -294,3 +296,26 @@ async def test_repinning_cannot_read_or_replay_previous_scope(clients, identitie
         rows = (await clients.get('/calls', headers=headers)).json()
         assert rows and all(row['tags']['workspace'] == workspace for row in rows)
     assert len(hits) == 2
+
+
+async def test_routed_parent_row_carries_the_pin_and_reviews_are_scoped(clients, identities, enrichment_on, monkeypatch):
+    """A routed call writes its parent audit row outside `service.py`; it must carry the pin or
+    the caller's own call disappears from the filtered history. A review is a read of the same
+    row, so a foreign reference is a 404 for a pinned caller."""
+    org, h = identities
+    monkeypatch.setattr(call_service, 'relay', _relay_by_provider(
+        {'tomba': [(200, {'data': {'email': 'patrick@stripe.com', 'score': 99,
+                                   'verification': {'status': 'valid'}}})]}, []))
+    r = await clients.post(f'/call/{ROUTED}', json={'full_name': 'Patrick Collison', 'domain': 'stripe.com'},
+                           headers=h['a'])
+    assert r.status_code == 200, r.text
+    ref = r.headers['X-Treg-Call-Id']
+    await audit.drain()
+    rows = (await clients.get('/calls', headers=h['a'])).json()
+    assert {(x['tool_name'], x['credential_tier'], x['call_ref']) for x in rows} >= {(ROUTED, 'routed', ref)}
+    assert all(x['tags'] == {'customer': 'a'} for x in rows)
+    assert (await clients.get('/calls', headers=h['b'])).json() == []
+    assert (await clients.get(f'/calls/{ref}', headers=h['a'])).json()['call']['tool_name'] == ROUTED
+    review = {'call_id': ref, 'usefulness': 'useful'}
+    assert (await clients.post('/reviews', json=review, headers=h['b'])).status_code == 404
+    assert (await clients.post('/reviews', json=review, headers=h['a'])).status_code == 201
